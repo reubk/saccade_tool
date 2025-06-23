@@ -58,14 +58,25 @@ def preprocess_data(_df, config):
         'CURRENT_SAC_AMPLITUDE', 'CURRENT_SAC_AVG_VELOCITY', 
         'CURRENT_SAC_PEAK_VELOCITY', 'TARGET_ONSET_TIME', 'CURRENT_SAC_START_TIME'
     ]
-    # Only try to convert columns that have been mapped by the user.
+    # Also ensure the GAP column is numeric if it's been mapped by the user.
+    if 'GAP' in df.columns:
+        numeric_cols.append('GAP')
+        
     existing_numeric_cols = [col for col in numeric_cols if col in df.columns]
     for col in existing_numeric_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce')
+    # Drop rows where any of these critical columns are not valid numbers.
     df.dropna(subset=existing_numeric_cols, inplace=True)
     
-    # Calculate latency and apply a standard minimum latency filter.
+    # Calculate the raw latency first.
     df['LATENCY'] = df['CURRENT_SAC_START_TIME'] - df['TARGET_ONSET_TIME']
+    
+    # If a GAP column exists, subtract its value to get the true latency.
+    # This is now independent of the "group by gap" checkbox.
+    if 'GAP' in df.columns:
+        df['LATENCY'] = df['LATENCY'] - df['GAP']
+    
+    # Now, apply the minimum latency filter to the corrected latency values.
     df = df[df['LATENCY'] > 120]
     
     return df
