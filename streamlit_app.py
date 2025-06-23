@@ -131,29 +131,32 @@ def summarize_data_wide(_primary_saccades, config):
     all_summaries = []
 
     # Helper function to compute descriptive stats for a given metric.
-    def calculate_descriptives(data, metric):
-        if metric == 'percentError':
-            incorrects = (data['ERROR'] == 1).sum()
-            total = len(data)
-            return pd.Series({'percentError': (incorrects / total * 100) if total > 0 else 0})
+    def calculate_descriptives(data, metric, remove_outliers):
+    if metric == 'percentError':
+        incorrects = (data['ERROR'] == 1).sum()
+        total = len(data)
+        return pd.Series({'percentError': (incorrects / total * 100) if total > 0 else 0})
 
-        # For other metrics, use only correct trials and remove outliers.
-        correct_data = data[data['ERROR'] == 0]
-        if metric not in correct_data.columns or correct_data.empty:
-            return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
-        
-        # Outlier removal: filter data to be within +/- 2 standard deviations of the mean.
+    # For other metrics, use only correct trials.
+    correct_data = data[data['ERROR'] == 0]
+    if metric not in correct_data.columns or correct_data.empty:
+        return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
+    
+    # Option to remove outliers: filter data to be within +/- 2 standard deviations of the mean.
+    if remove_outliers:
         ll = correct_data[metric].mean() - 2 * correct_data[metric].std()
         ul = correct_data[metric].mean() + 2 * correct_data[metric].std()
         valid_data = correct_data[correct_data[metric].between(ll, ul)]
+    else:
+        valid_data = correct_data
 
-        if valid_data.empty:
-            return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
-        
-        return pd.Series({
-            f'{metric}_mean': valid_data[metric].mean(),
-            f'{metric}_std': valid_data[metric].std()
-        })
+    if valid_data.empty:
+        return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
+    
+    return pd.Series({
+        f'{metric}_mean': valid_data[metric].mean(),
+        f'{metric}_std': valid_data[metric].std()
+    })
 
     # Generate all possible combinations of conditions (for main effects, interactions, etc.).
     all_grouping_combos = []
