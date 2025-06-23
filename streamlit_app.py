@@ -119,15 +119,28 @@ def calculate_error_and_gain(_df, config):
 @st.cache_data
 def find_primary_saccades(_df):
     """
-    Identifies the primary saccade for each trial.
-    
-    This is defined as the first saccade with an amplitude >= 2 degrees of visual angle
-    at least 120ms after the target onset (see latency filter above).
+    Identifies the primary saccade for each trial using a multi-step process.
+
+    For each trial, it first considers the first three saccades occurring after
+    the 120ms latency cutoff. From this subset of three, it then selects the 
+    very first saccade that has an amplitude of 2 degrees or greater.
     """
     df = _df.copy()
+    
+    # Sort all saccades by latency to ensure we process them in temporal order.
     df_sorted = df.sort_values(by=['DATA_FILE', 'TRIAL_LABEL', 'LATENCY'])
-    df_filtered = df_sorted[df_sorted['CURRENT_SAC_AMPLITUDE'] >= 2]
-    primary_saccades = df_filtered.drop_duplicates(subset=['DATA_FILE', 'TRIAL_LABEL'], keep='first')
+    
+    # Group by trial and take the first 3 saccades for each one.
+    # This creates a subset of the data containing only the initial saccades.
+    first_three_saccades = df_sorted.groupby(['DATA_FILE', 'TRIAL_LABEL']).head(3)
+    
+    # From that subset, filter for saccades that meet the amplitude criterion.
+    valid_amplitude_saccades = first_three_saccades[first_three_saccades['CURRENT_SAC_AMPLITUDE'] >= 2]
+    
+    # Finally, group by trial again and take the very first saccade from the valid amplitude list.
+    # This is the primary saccade.
+    primary_saccades = valid_amplitude_saccades.groupby(['DATA_FILE', 'TRIAL_LABEL']).head(1)
+    
     return primary_saccades
 
 @st.cache_data
