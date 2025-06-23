@@ -109,7 +109,7 @@ def find_primary_saccades(_df):
     Identifies the primary saccade for each trial.
     
     This is defined as the first saccade with an amplitude >= 2 degrees of visual angle
-    after the target onset.
+    at least 120ms after the target onset (see latency filter above).
     """
     df = _df.copy()
     df_sorted = df.sort_values(by=['DATA_FILE', 'TRIAL_LABEL', 'LATENCY'])
