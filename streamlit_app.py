@@ -4,6 +4,8 @@ import numpy as np
 from functools import reduce
 import io
 from itertools import combinations
+import plotly.express as px
+import xlsxwriter as xw
 
 # --- Data Processing Functions ---
 
@@ -130,33 +132,33 @@ def summarize_data_wide(_primary_saccades, config):
     metrics = config.get('metrics', [])
     all_summaries = []
 
-    # Helper function to compute descriptive stats for a given metric.
+# Helper function to compute descriptive stats for a given metric.
     def calculate_descriptives(data, metric, remove_outliers):
-    if metric == 'percentError':
-        incorrects = (data['ERROR'] == 1).sum()
-        total = len(data)
-        return pd.Series({'percentError': (incorrects / total * 100) if total > 0 else 0})
+        if metric == 'percentError':
+            incorrects = (data['ERROR'] == 1).sum()
+            total = len(data)
+            return pd.Series({'percentError': (incorrects / total * 100) if total > 0 else 0})
 
-    # For other metrics, use only correct trials.
-    correct_data = data[data['ERROR'] == 0]
-    if metric not in correct_data.columns or correct_data.empty:
-        return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
-    
-    # Option to remove outliers: filter data to be within +/- 2 standard deviations of the mean.
-    if remove_outliers:
-        ll = correct_data[metric].mean() - 2 * correct_data[metric].std()
-        ul = correct_data[metric].mean() + 2 * correct_data[metric].std()
-        valid_data = correct_data[correct_data[metric].between(ll, ul)]
-    else:
-        valid_data = correct_data
+        # For other metrics, use only correct trials.
+        correct_data = data[data['ERROR'] == 0]
+        if metric not in correct_data.columns or correct_data.empty:
+            return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
+        
+        # Option to remove outliers: filter data to be within +/- 2 standard deviations of the mean.
+        if remove_outliers:
+            ll = correct_data[metric].mean() - 2 * correct_data[metric].std()
+            ul = correct_data[metric].mean() + 2 * correct_data[metric].std()
+            valid_data = correct_data[correct_data[metric].between(ll, ul)]
+        else:
+            valid_data = correct_data
 
-    if valid_data.empty:
-        return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
-    
-    return pd.Series({
-        f'{metric}_mean': valid_data[metric].mean(),
-        f'{metric}_std': valid_data[metric].std()
-    })
+        if valid_data.empty:
+            return pd.Series({f'{metric}_mean': np.nan, f'{metric}_std': np.nan})
+        
+        return pd.Series({
+            f'{metric}_mean': valid_data[metric].mean(),
+            f'{metric}_std': valid_data[metric].std()
+        })
 
     # Generate all possible combinations of conditions (for main effects, interactions, etc.).
     all_grouping_combos = []
@@ -355,8 +357,9 @@ if st.session_state.result_df is not None and not st.session_state.result_df.emp
     @st.cache_data
     def convert_df_to_excel(_df):
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
             _df.to_excel(writer, index=False, sheet_name='Saccade_Results')
+        output.seek(0)
         return output.getvalue()
 
     excel_data = convert_df_to_excel(st.session_state.result_df)
