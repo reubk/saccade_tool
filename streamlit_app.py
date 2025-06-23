@@ -168,17 +168,22 @@ def summarize_data_wide(_primary_saccades, config):
         for combo in all_grouping_combos:
             current_grouping = [base_group] + list(combo)
             
-            summary = df.groupby(current_grouping).apply(calculate_descriptives, metric).reset_index()
+            # Pass the outlier removal flag to the calculation function
+            summary = df.groupby(current_grouping).apply(
+                calculate_descriptives, metric, remove_outliers=config['use_outlier_removal']
+                ).reset_index()
             
             # We melt and pivot to transform the data into the desired wide format.
             id_vars = [base_group] + list(combo)
             melted = summary.melt(id_vars=id_vars, var_name='stat', value_name='value')
             
             # Create clear, descriptive column names.
-            if list(combo): # e.g., "LATENCY_mean_emotional"
-                melted['col_name'] = melted['stat'] + '_' + melted[list(combo)].astype(str).agg('_'.join, axis=1)
-            else: # e.g., "LATENCY_mean_overall"
-                melted['col_name'] = melted['stat'] + '_overall'
+            # Create clear, descriptive column names (e.g., "gap_LATENCY_mean")
+            if list(combo):
+                condition_name = melted[list(combo)].astype(str).agg('_'.join, axis=1)
+                melted['col_name'] = condition_name + '_' + melted['stat']
+            else:
+                melted['col_name'] = 'overall_' + melted['stat']
 
             pivoted = melted.pivot_table(index=base_group, columns='col_name', values='value').reset_index()
             all_summaries.append(pivoted)
@@ -270,9 +275,12 @@ with st.sidebar:
         default_metrics = ['percentError', 'LATENCY', 'GAIN']
         selected_metrics = st.multiselect("Select metrics to calculate:", available_metrics, default=[m for m in default_metrics if m in available_metrics])
         
+        st.subheader("7. Analysis Settings")
+        use_outlier_removal = st.checkbox("Remove metric outliers (> 2 SD from mean)", value=True)
+
         separate_by_task = False
         if task_type_selection == 'Interleaved':
-            st.subheader("7. Output Format")
+            st.subheader("8. Output Format")
             separate_by_task = st.checkbox("Separate columns by task type", value=True)
 
 if st.session_state.df is not None:
@@ -291,6 +299,7 @@ if st.session_state.df is not None:
                 'use_amplitude': use_amplitude,
                 'amplitude_map': amplitude_map,
                 'task_type': task_type_options[task_type_selection],
+                'use_outlier_removal': use_outlier_removal,
             })
 
             tasks_to_run = ['prosaccade', 'antisaccade'] if analysis_config['task_type'] == 'interleaved' else [task_type_options[task_type_selection]]
