@@ -215,7 +215,7 @@ def summarize_data_wide(_primary_saccades, config):
             all_summaries.append(pivoted)
 
     if not all_summaries:
-        return pd.DataFrame(columns=[base_group])
+        return pd.DataFrame(columns=pd.Index([base_group]))
 
     # Merge all the pivoted tables into a single master DataFrame.
     final_df = reduce(lambda left, right: pd.merge(left, right, on=base_group, how='outer'), all_summaries)
