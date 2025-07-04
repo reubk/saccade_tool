@@ -6,11 +6,16 @@ import io
 from itertools import combinations
 import plotly.express as px
 import xlsxwriter as xw
+from typing import Dict, Any, List, Union, Optional
+import warnings
+
+# Suppress FutureWarnings from pandas
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 # --- Data Processing Functions ---
 
 @st.cache_data
-def load_data(uploaded_file):
+def load_data(uploaded_file: Any) -> Optional[pd.DataFrame]:
     """
     Reads an uploaded Excel file into a pandas DataFrame.
     Caches the result to prevent re-reading the file on every interaction.
@@ -22,7 +27,7 @@ def load_data(uploaded_file):
         return None
 
 @st.cache_data
-def preprocess_data(_df, config):
+def preprocess_data(_df: pd.DataFrame, config: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """
     Takes the raw DataFrame and applies all initial cleaning and preparation steps.
     
@@ -82,7 +87,7 @@ def preprocess_data(_df, config):
     return df
 
 @st.cache_data
-def calculate_error_and_gain(_df, config):
+def calculate_error_and_gain(_df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
     """
     Calculates trial error and saccadic gain.
     
@@ -91,21 +96,20 @@ def calculate_error_and_gain(_df, config):
     """
     df = _df.copy()
     
-    # Convert saccade direction to a numeric value for calculation.
-    df['ErrorSacDirection'] = np.where(df['CURRENT_SAC_DIRECTION'] == 'RIGHT', -1, 1)
+    # Standardize direction representation: 1 for Right, -1 for Left.
+    # This makes subsequent logic much clearer and less error-prone.
+    # Using .str.lower() adds robustness against case variations (e.g., 'Right' vs 'right').
+    df['TargetDirectionNumeric'] = np.where(df['TARGET_DIRECTION'].str.lower() == 'right', 1, -1)
+    df['SaccadeDirectionNumeric'] = np.where(df['CURRENT_SAC_DIRECTION'].str.lower() == 'right', 1, -1)
     
     # The logic for determining a correct trial is opposite for anti- and pro-saccades.
     if config['current_task'] == 'antisaccade':
-        # For antisaccades, a correct response is in the opposite direction of the target.
-        df['ErrorTargDirection'] = np.where(df['TARGET_DIRECTION'] == 'Right', -1, 1)
-        df['ErrorTargminusSac'] = df['ErrorTargDirection'] - df['ErrorSacDirection']
-        df['ERROR'] = np.where(df['ErrorTargminusSac'] == 0, 1, 0) # 1=incorrect, 0=correct
+        # For antisaccades, an error occurs if saccade is in the SAME direction as the target.
+        df['ERROR'] = np.where(df['TargetDirectionNumeric'] == df['SaccadeDirectionNumeric'], 1, 0) # 1=incorrect, 0=correct
     else: # prosaccade
-        # For prosaccades, a correct response is in the same direction as the target.
-        df['ErrorTargDirection'] = np.where(df['TARGET_DIRECTION'] == 'Right', 1, -1)
-        df['ErrorTargminusSac'] = df['ErrorTargDirection'] - df['ErrorSacDirection']
-        df['ERROR'] = np.where(df['ErrorTargminusSac'] != 0, 1, 0) # 1=incorrect, 0=correct
-
+        # For prosaccades, an error occurs if saccade is in the OPPOSITE direction of the target.
+        df['ERROR'] = np.where(df['TargetDirectionNumeric'] != df['SaccadeDirectionNumeric'], 1, 0) # 1=incorrect, 0=correct
+    
     # Calculate GAIN if amplitude analysis is enabled.
     if config['use_amplitude'] and config.get('amplitude_map'):
         amp_map = {k: pd.to_numeric(v, errors='coerce') for k, v in config['amplitude_map'].items()}
@@ -117,7 +121,7 @@ def calculate_error_and_gain(_df, config):
     return df
 
 @st.cache_data
-def find_primary_saccades(_df):
+def find_primary_saccades(_df: pd.DataFrame) -> pd.DataFrame:
     """
     Identifies the primary saccade for each trial using a multi-step process.
 
@@ -144,7 +148,7 @@ def find_primary_saccades(_df):
     return primary_saccades
 
 @st.cache_data
-def summarize_data_wide(_primary_saccades, config):
+def summarize_data_wide(_primary_saccades: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
     """
     Calculates all descriptive statistics and pivots the data to produce a
     wide-format output with one row per participant.
@@ -157,7 +161,7 @@ def summarize_data_wide(_primary_saccades, config):
     all_summaries = []
 
 # Helper function to compute descriptive stats for a given metric.
-    def calculate_descriptives(data, metric, remove_outliers):
+    def calculate_descriptives(data: pd.DataFrame, metric: str, remove_outliers: bool) -> pd.Series:
         if metric == 'percentError':
             incorrects = (data['ERROR'] == 1).sum()
             total = len(data)
@@ -185,7 +189,7 @@ def summarize_data_wide(_primary_saccades, config):
         })
 
     # Generate all possible combinations of conditions (for main effects, interactions, etc.).
-    all_grouping_combos = []
+    all_grouping_combos: List[tuple] = []
     for i in range(len(grouping_cols) + 1):
         all_grouping_combos.extend(combinations(grouping_cols, i))
 
@@ -218,9 +222,61 @@ def summarize_data_wide(_primary_saccades, config):
         return pd.DataFrame(columns=pd.Index([base_group]))
 
     # Merge all the pivoted tables into a single master DataFrame.
-    final_df = reduce(lambda left, right: pd.merge(left, right, on=base_group, how='outer'), all_summaries)
+    final_df: pd.DataFrame = reduce(lambda left, right: pd.merge(left, right, on=base_group, how='outer'), all_summaries)
     return final_df
 
+@st.cache_data
+def generate_plotting_data(_primary_saccades: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Generates a long-format DataFrame suitable for plotting.
+    Calculates mean metric values per participant for each condition.
+    """
+    df = _primary_saccades.copy()
+    grouping_cols = config.get('grouping_cols', [])
+    metrics = config.get('metrics', [])
+    
+    # Base grouping for all calculations: per participant, per condition
+    base_grouping = ['RECORDING_SESSION_LABEL'] + grouping_cols
+
+    all_participant_summaries = []
+
+    # Calculate percentError
+    if 'percentError' in metrics:
+        # Group by participant and conditions, then calculate error rate for each group
+        error_summary = df.groupby(base_grouping).apply(
+            lambda x: (x['ERROR'].sum() / len(x) * 100) if len(x) > 0 else 0
+        ).reset_index(name='value')
+        error_summary['metric'] = 'percentError'
+        all_participant_summaries.append(error_summary)
+
+    # Calculate other metrics on correct trials
+    correct_trials = df[df['ERROR'] == 0]
+    other_metrics = [m for m in metrics if m != 'percentError' and m in correct_trials.columns]
+    
+    if other_metrics:
+        # Calculate the mean for each metric for each participant/condition group
+        summary = correct_trials.groupby(base_grouping)[other_metrics].mean(numeric_only=True).reset_index()
+        
+        # Melt the summary to get a long format: [participant, condition_cols..., metric, value]
+        melted_summary = summary.melt(
+            id_vars=base_grouping,
+            value_vars=other_metrics,
+            var_name='metric',
+            value_name='value'
+        )
+        all_participant_summaries.append(melted_summary)
+
+    if not all_participant_summaries:
+        return pd.DataFrame()
+
+    plotting_df: pd.DataFrame = pd.concat(all_participant_summaries, ignore_index=True)
+
+    if grouping_cols:
+        plotting_df['condition'] = plotting_df[grouping_cols].astype(str).agg(' - '.join, axis=1)
+    else:
+        plotting_df['condition'] = 'Overall'
+        
+    return plotting_df
 
 # --- Streamlit User Interface ---
 
@@ -232,6 +288,8 @@ if 'df' not in st.session_state:
     st.session_state.df = None
 if 'result_df' not in st.session_state:
     st.session_state.result_df = None
+if 'plotting_df' not in st.session_state:
+    st.session_state.plotting_df = None
 
 with st.sidebar:
     st.header("Setup & Configuration")
@@ -259,7 +317,7 @@ with st.sidebar:
         core_cols = {'RECORDING_SESSION_LABEL':'Participant ID','CURRENT_SAC_DIRECTION':'Saccade Direction','TARGET_ONSET_TIME': "Target Onset Time",'CURRENT_SAC_AMPLITUDE':'Saccade Amplitude','CURRENT_SAC_START_TIME':'Saccade Start Time','DATA_FILE':'EDF File Name','TRIAL_LABEL':'Trial Label','TARGET_DIRECTION': "Target Direction"}
         optional_cols = {'CURRENT_SAC_AVG_VELOCITY':'Saccade Avg Velocity','CURRENT_SAC_PEAK_VELOCITY':'Saccade Peak Velocity'}
         
-        config = {'grouping_cols': []}
+        config: Dict[str, Any] = {'grouping_cols': []}
         
         if task_type_selection == 'Interleaved':
             core_cols['BLOCK_INSTRUCTION'] = 'Task Instruction (TOWARD/AWAY)'
@@ -273,7 +331,7 @@ with st.sidebar:
             core_cols['GAP'] = 'Gap/Step/Overlap Info'
             config['grouping_cols'].append('GAP')
 
-        column_mapping = {}
+        column_mapping: Dict[str, str] = {}
         st.write("**Core Variables:**")
         for internal_name, desc in core_cols.items():
             column_mapping[internal_name] = st.selectbox(f"{desc}:", df_cols, key=f"map_{internal_name}")
@@ -315,10 +373,11 @@ if st.session_state.df is not None:
 
     if st.sidebar.button("Run Analysis", use_container_width=True):
         st.session_state.result_df = None
+        st.session_state.plotting_df = None
         with st.spinner("Processing data... This may take a moment on the first run."):
             
             final_map = {k: v for k, v in column_mapping.items() if v != '-'}
-            analysis_config = config.copy()
+            analysis_config: Dict[str, Any] = config.copy()
             analysis_config.update({
                 'column_mapping': final_map,
                 'metrics': selected_metrics,
@@ -331,6 +390,7 @@ if st.session_state.df is not None:
             tasks_to_run = ['prosaccade', 'antisaccade'] if analysis_config['task_type'] == 'interleaved' else [task_type_options[task_type_selection]]
             
             all_results = {}
+            all_plotting_data = {}
             for task in tasks_to_run:
                 st.info(f"Analyzing {task.title()} task...")
                 task_config = analysis_config.copy()
@@ -345,6 +405,10 @@ if st.session_state.df is not None:
                         result = summarize_data_wide(primary, task_config)
                         if result is not None and not result.empty:
                             all_results[task] = result
+
+                        plotting_data = generate_plotting_data(primary, task_config)
+                        if plotting_data is not None and not plotting_data.empty:
+                            all_plotting_data[task] = plotting_data
                         else: st.warning(f"Summarization failed for the {task} task.")
                     else: st.warning(f"No primary saccades were found for the {task} task after filtering.")
                 else: st.warning(f"No data remained after preprocessing for the {task} task.")
@@ -370,6 +434,13 @@ if st.session_state.df is not None:
 
                 st.session_state.result_df = final_df
                 st.success("Analysis Complete!")
+
+                if all_plotting_data:
+                    for task, df in all_plotting_data.items():
+                        df['task'] = task
+                    final_plotting_df = pd.concat(all_plotting_data.values(), ignore_index=True)
+                    st.session_state.plotting_df = final_plotting_df
+
             else:
                 st.error("Analysis failed. Please review your data file and column mappings.")
 
@@ -379,12 +450,11 @@ if st.session_state.result_df is not None and not st.session_state.result_df.emp
     
     # Provide a download button for the results.
     @st.cache_data
-    def convert_df_to_excel(_df):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            _df.to_excel(writer, index=False, sheet_name='Saccade_Results')
-        output.seek(0)
-        return output.getvalue()
+    def convert_df_to_excel(_df: pd.DataFrame) -> bytes:
+        """Converts a DataFrame to an in-memory Excel file (bytes)."""
+        buffer = io.BytesIO()
+        _df.to_excel(buffer, index=False, sheet_name='Saccade_Results', engine='openpyxl')
+        return buffer.getvalue() # No need for seek(0) as getvalue() returns the entire buffer.
 
     excel_data = convert_df_to_excel(st.session_state.result_df)
     
@@ -395,3 +465,28 @@ if st.session_state.result_df is not None and not st.session_state.result_df.emp
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
+
+if st.session_state.plotting_df is not None and not st.session_state.plotting_df.empty:
+    st.header("Metric Plots")
+    
+    plot_df = st.session_state.plotting_df
+    
+    # Let user select which metric to plot from the available ones.
+    metric_to_plot = st.selectbox("Select a metric to visualize:", options=sorted(plot_df['metric'].unique()))
+    
+    if metric_to_plot:
+        df_to_plot = plot_df[plot_df['metric'] == metric_to_plot]
+        
+        # Create the plot
+        fig = px.box(
+            df_to_plot, 
+            x='condition', 
+            y='value', 
+            color='condition',
+            facet_col='task' if 'task' in df_to_plot.columns and df_to_plot['task'].nunique() > 1 else None,
+            points="all",
+            labels={'value': metric_to_plot, 'condition': 'Condition'},
+            title=f'Distribution of {metric_to_plot} by Condition'
+        )
+        fig.update_traces(quartilemethod="exclusive") # or "inclusive", "linear"
+        st.plotly_chart(fig, use_container_width=True)
